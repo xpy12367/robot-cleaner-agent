@@ -1,0 +1,11 @@
+collection_name: agent  # 集合名称
+persist_directory: chroma_db  # 持久化目录
+k: 3  # k值
+data_path: data  # 数据路径
+md5_hex_store: md5.text  # md5存储
+allow_knowledge_file_type: ["txt", "pdf"]  # 允许的知识文件类型
+
+#分割器
+chunk_size: 200   # 每个chunk的大小
+chunk_overlap: 20   # 每个chunk的重叠部分
+separators: ["\n\n", "\n", ".", "!", "?", ".", "!", "?", " ", ""] #separators:

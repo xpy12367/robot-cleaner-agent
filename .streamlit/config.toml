@@ -1,0 +1,8 @@
+# Streamlit 前端主题配置(扫地机器人智能客服)
+[theme]
+base = "light"
+primaryColor = "#2563EB"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F2F5FA"
+textColor = "#1F2937"
+font = "sans serif"
