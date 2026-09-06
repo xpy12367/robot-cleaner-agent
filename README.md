@@ -123,4 +123,6 @@ python -m unittest discover -s tests -v
 
 ## 许可证
 
-当前仓库未附加开源许可证，默认保留全部权利。
+除 `data/` 目录外，本项目的源代码和项目原创文档采用 [MIT License](LICENSE)。
+
+`data/` 目录不属于 MIT 授权范围；其中包含演示数据、知识库摘要及基于第三方官方资料归纳的文档，详见 [`data/LICENSE.md`](data/LICENSE.md)。
