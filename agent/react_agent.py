@@ -20,10 +20,10 @@ class ReactAgent:
             "messages": [
                 {"role": "user", "content": query},
             ]
-        }
+        }  #把用户问题包成 Agent 认识的"对话消息"格式
 
         # 第三个参数context就是上下文runtime中的信息，就是我们做提示词切换的标记
-        #.stream(...) —— 流式执行方法   input_dict —— 输入数据    stream_mode="values" —— 流式输出的模式     context={"report": False} —— 传给运行时的自定义上下文（关键）
+        #.stream(...) —— 流式执行方法   input_dict —— 输入数据  stream_mode="values" —— 流式输出的模式   context={"report": False} —— 传给运行时的自定义上下文（关键）
         for chunk in self.agent.stream(input_dict, stream_mode="values", context={"report": False}):
             latest_message = chunk["messages"][-1]
             if latest_message.content:
