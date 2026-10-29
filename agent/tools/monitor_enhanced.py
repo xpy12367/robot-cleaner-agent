@@ -51,12 +51,12 @@ class ToolMetrics:
 
         # 记录详细信息
         record = {
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": datetime.now().isoformat(),  # 时间戳 isoformat(): 格式为YYYY-MM-DDTHH:MM:SS.SSSZ
             "trace_id": trace_id,
             "tool_name": tool_name,
             "duration": round(duration, 3),
             "success": success,
-            "error": error
+            "error": error,
         }
 
         self.recent_calls.append(record)
@@ -132,6 +132,7 @@ class MonitorConfig:
 
 # ==================== 增强监控中间件 ====================
 @wrap_tool_call
+# 工具调用监控中间件
 def monitor_tool_enhanced(
     request: ToolCallRequest,
     handler: Callable[[ToolCallRequest], ToolMessage | Command],
@@ -208,7 +209,7 @@ def monitor_tool_enhanced(
             should_retry = (
                 is_retryable
                 and attempt <= MonitorConfig.max_retries
-                and not isinstance(e, tuple(MonitorConfig.non_retryable_errors))
+                and not isinstance(e, tuple(MonitorConfig.non_retryable_errors))  # 检查是否为不可重试错误类型
             )
 
             if should_retry:

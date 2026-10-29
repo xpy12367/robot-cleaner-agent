@@ -1,14 +1,27 @@
 from langchain.agents import create_agent
 from model.factory import chat_model
-from agent.tools.agent_tools import (rag_summarize, get_weather, get_user_location, get_user_id,
-    get_current_month, fetch_external_data, fill_context_for_report)
+from agent.tools.agent_tools import (
+    rag_summarize,
+    get_weather,
+    get_user_location,
+    get_user_id,
+    get_current_month,
+    fetch_external_data,
+    fill_context_for_report,
+)
 from agent.tools.middleware import monitor_tool, log_before_model, report_prompt_switch
 from utils.prompt_loader import load_system_prompts
 from agent.memory_manager import MemoryManager
 from utils.logger_handler import logger
 
+
 class ReactAgent:
-    def __init__(self, session_id: str = "default", enable_memory: bool = True, max_history_turns: int = 5):
+    def __init__(
+        self,
+        session_id: str = "default",
+        enable_memory: bool = True,
+        max_history_turns: int = 5,
+    ):
         """
         初始化ReactAgent
 
@@ -25,8 +38,15 @@ class ReactAgent:
         self.agent = create_agent(
             model=chat_model,
             system_prompt=load_system_prompts(),
-            tools=[rag_summarize, get_weather, get_user_location, get_user_id,
-                    get_current_month, fetch_external_data, fill_context_for_report],
+            tools=[
+                rag_summarize,
+                get_weather,
+                get_user_location,
+                get_user_id,
+                get_current_month,
+                fetch_external_data,
+                fill_context_for_report,
+            ],
             middleware=[monitor_tool, log_before_model, report_prompt_switch],
         )
 
@@ -36,13 +56,15 @@ class ReactAgent:
                 session_id=session_id,
                 max_turns=max_history_turns,
                 max_tokens=4000,
-                enable_persistence=False  # 默认不持久化，避免隐私问题
+                enable_persistence=False,  # 默认不持久化，避免隐私问题
             )
-            logger.info(f"[ReactAgent] 已启用会话记忆 (session_id={session_id}, max_turns={max_history_turns})")
+            logger.info(
+                f"[ReactAgent] 已启用会话记忆 (session_id={session_id}, max_turns={max_history_turns})"
+            )
         else:
             self.memory = None
             logger.info(f"[ReactAgent] 未启用会话记忆")
-        
+
     def execute_stream(self, query: str):
         """
         执行流式输出：
@@ -53,7 +75,9 @@ class ReactAgent:
         messages = []
         if self.enable_memory and self.memory:
             # 获取历史对话（最近N轮）
-            history_messages = self.memory.get_recent_messages(num_turns=self.max_history_turns)
+            history_messages = self.memory.get_recent_messages(
+                num_turns=self.max_history_turns
+            )
             messages.extend(history_messages)  # 扩展消息列表
             logger.debug(f"[ReactAgent] 加载 {len(history_messages)} 条历史消息")
 
@@ -64,7 +88,9 @@ class ReactAgent:
 
         # 2. 执行流式推理
         full_response = ""
-        for chunk in self.agent.stream(input_dict, stream_mode="values", context={"report": False}):
+        for chunk in self.agent.stream(
+            input_dict, stream_mode="values", context={"report": False}
+        ):
             latest_message = chunk["messages"][-1]
             if latest_message.content:
                 content = latest_message.content.strip() + "\n"
@@ -75,7 +101,9 @@ class ReactAgent:
         if self.enable_memory and self.memory:
             self.memory.add_user_message(query)
             self.memory.add_assistant_message(full_response.strip())
-            logger.info(f"[ReactAgent] 已保存对话到记忆 (当前轮次: {self.memory.get_turn_count()})")
+            logger.info(
+                f"[ReactAgent] 已保存对话到记忆 (当前轮次: {self.memory.get_turn_count()})"
+            )
 
     def execute_chat_stream(self, query: str):
         """
@@ -89,9 +117,13 @@ class ReactAgent:
         messages = []
         if self.enable_memory and self.memory:
             # 获取历史对话（最近N轮）
-            history_messages = self.memory.get_recent_messages(num_turns=self.max_history_turns)
+            history_messages = self.memory.get_recent_messages(
+                num_turns=self.max_history_turns
+            )
             messages.extend(history_messages)
-            logger.debug(f"[ReactAgent.execute_chat_stream] 加载 {len(history_messages)} 条历史消息")
+            logger.debug(
+                f"[ReactAgent.execute_chat_stream] 加载 {len(history_messages)} 条历史消息"
+            )
 
         # 添加当前用户问题
         messages.append({"role": "user", "content": query})
@@ -100,9 +132,13 @@ class ReactAgent:
 
         # 2. 执行流式推理（token级）
         full_response = ""
-        for chunk, metadata in self.agent.stream(input_dict, stream_mode="messages", context={"report": False}):
+        for chunk, metadata in self.agent.stream(
+            input_dict, stream_mode="messages", context={"report": False}
+        ):
             # 主模型的思考过程 content 为空，不产出；只有最终回答才有文本内容
-            if metadata.get("langgraph_node") == "model" and getattr(chunk, "content", None):
+            if metadata.get("langgraph_node") == "model" and getattr(
+                chunk, "content", None
+            ):
                 full_response += chunk.content
                 yield chunk.content
 
@@ -110,7 +146,9 @@ class ReactAgent:
         if self.enable_memory and self.memory:
             self.memory.add_user_message(query)
             self.memory.add_assistant_message(full_response.strip())
-            logger.info(f"[ReactAgent.execute_chat_stream] 已保存对话到记忆 (当前轮次: {self.memory.get_turn_count()})")
+            logger.info(
+                f"[ReactAgent.execute_chat_stream] 已保存对话到记忆 (当前轮次: {self.memory.get_turn_count()})"
+            )
 
     def clear_memory(self) -> None:
         """清空当前会话的记忆"""
@@ -128,7 +166,8 @@ class ReactAgent:
 
         return f"当前记忆轮次: {turn_count}\n最近对话摘要:\n{summary}"
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     agent = ReactAgent()
 
     for chunk in agent.execute_stream("扫地机器人在我所在的地区的气温下如何保养"):
