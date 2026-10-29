@@ -4,6 +4,9 @@ key:value
 """
 import yaml
 from utils.path_tool import get_abs_path
+from dotenv import load_dotenv
+
+load_dotenv(dotenv_path=get_abs_path(".env"), override=False)
 
 def load_rag_config(config_path:str=get_abs_path("config/rag.yaml"),encoding:str="utf-8"):
     """

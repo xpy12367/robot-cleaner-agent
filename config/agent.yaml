@@ -1,8 +1,7 @@
 chat_model_name: qwen3.7-plus
-embedding_model_name: text-embedding-v4  #text-embedding-v1
+embedding_model_name: text-embedding-v4 #text-embedding-v1
 api_key: DASHSCOPE_API_KEY
 base_url: DASHSCOPE_BASE_URL
-
 external_data_path: data/external/records.csv
 
 amap_key: AMAP_KEY

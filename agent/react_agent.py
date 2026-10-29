@@ -54,7 +54,7 @@ class ReactAgent:
         if self.enable_memory and self.memory:
             # 获取历史对话（最近N轮）
             history_messages = self.memory.get_recent_messages(num_turns=self.max_history_turns)
-            messages.extend(history_messages)
+            messages.extend(history_messages)  # 扩展消息列表
             logger.debug(f"[ReactAgent] 加载 {len(history_messages)} 条历史消息")
 
         # 添加当前用户问题

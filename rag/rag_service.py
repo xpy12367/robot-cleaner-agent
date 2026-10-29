@@ -17,12 +17,18 @@ def print_prompt(prompt):
 class RagSummarizeService:
     def __init__(self):
         self.vector_store = VectorStoreService()
-        self.retriever = self.vector_store.get_retriever()
+
+        index_count = self.vector_store.ensure_index()
+        if index_count == 0:
+            raise RuntimeError(
+                "知识库索引为空，请检查 data 目录、Embedding 配置和网络后重试"
+            )
+
+        self.retriever = self.vector_store.get_hybrid_retriever()
         self.prompt_text = load_rag_prompts()
         self.prompt_template = PromptTemplate.from_template(self.prompt_text)  #from_template(): 从模板中创建提示词
         self.model = chat_model
         self.chain = self._init_chain()
-
 
     def _init_chain(self):
         """
@@ -53,7 +59,7 @@ class RagSummarizeService:
         for doc in context_docs:
             counter+=1
             context += f"【参考资料{counter}】：参考资料：{doc.page_content}  |  参考元数据：{doc.metadata}\n"
-            #.page_content：文档的内容   .metadata：文档来源路径
+            # .page_content：文档的内容   .metadata：文档来源路径
 
         return self.chain.invoke(
             {

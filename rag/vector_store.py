@@ -36,7 +36,59 @@ class VectorStoreService:
         """
         return self.vector_store.as_retriever(search_kwargs={"k":chroma_config["k"]})
 
-    def load_document(self):
+    def get_all_documents(self) -> list[Document]:
+        """读取 Chroma 中的全部文本块，用于建立 BM25 索引。"""
+        data = self.vector_store.get(include=["documents", "metadatas"])
+
+        ids = data.get("ids") or []
+        contents = data.get("documents") or []
+        metadatas = data.get("metadatas") or []
+
+        return [
+            Document(
+                page_content=content,
+                metadata=metadata or {},
+                id=doc_id,
+            )
+            for doc_id, content, metadata in zip(ids, contents, metadatas)
+            if content
+        ]
+
+    def get_hybrid_retriever(self):
+        """创建向量 + BM25 的混合检索器。"""
+        from rag.hybrid_retriever import HybridRetriever
+
+        return HybridRetriever(
+            vector_store=self.vector_store,
+            documents=self.get_all_documents(),
+            k=chroma_config["k"],
+            candidate_k=chroma_config.get("hybrid_candidate_k", 10),
+            vector_weight=chroma_config.get("hybrid_vector_weight", 0.5),
+            bm25_weight=chroma_config.get("hybrid_bm25_weight", 0.5),
+            rrf_k=chroma_config.get("hybrid_rrf_k", 60),
+        )
+
+    def document_count(self) -> int:
+        """返回当前向量库中的文本块数量。"""
+        return self.vector_store._collection.count()
+
+    def ensure_index(self) -> int:
+        """
+        确保知识库索引存在：
+        - 索引为空时，强制扫描全部文件并构建
+        - 索引已有内容时，只处理新增或内容变化的文件
+        """
+        if self.document_count() == 0:
+            logger.info("[加载知识库]索引为空，开始首次构建")
+            self.load_document(force=True)
+        else:
+            self.load_document()
+
+        count = self.document_count()
+        logger.info(f"[加载知识库]当前索引共 {count} 个文本块")
+        return count
+
+    def load_document(self, force: bool = False):
         """
         从数据文件夹内读取数据文件，转为向量存入向量库
         要计算文件的MD5做去重
@@ -46,7 +98,7 @@ class VectorStoreService:
             """
             检查md5文件
             :param md5_for_check:md5文件
-            :return:
+            :return: bool
             """
             if not os.path.exists(get_abs_path(chroma_config["md5_hex_store"])):
                 # 创建文件
@@ -63,8 +115,8 @@ class VectorStoreService:
         def save_md5_hex(md5_for_check:str):
             """
             保存md5文件
-            :param md5_for_check:
-            :return:
+            :param md5_for_check:md5文件
+            :return: None
             """
             with open(get_abs_path(chroma_config["md5_hex_store"]),"a",encoding="utf-8") as f:
                 f.write(md5_for_check+"\n")
@@ -72,14 +124,20 @@ class VectorStoreService:
         def get_file_documents(read_path:str):
             """
             获取文件文档
-            :param read_path:
-            :return:
+            :param read_path:文件路径
+            :return:文档列表
             """
             if read_path.endswith(".txt"):
                 return txt_loader(read_path)
             elif read_path.endswith(".pdf"):
                 return pdf_loader(read_path)
             return []
+
+        if force:
+            md5_path = get_abs_path(chroma_config["md5_hex_store"])
+            with open(md5_path, "w", encoding="utf-8"):
+                pass
+        # 如果向量库明明是空的，但 md5.text 还残留旧记录，就先清空旧记录，确保文件会被重新写入索引。
 
         allowed_files_path:list[str]=listdir_with_allowed_type(
             get_abs_path(chroma_config["data_path"]),   # 数据文件夹路径
@@ -120,15 +178,12 @@ class VectorStoreService:
                 logger.error(f"[加载知识库]{path}加载失败：{str(e)}", exc_info=True)
                 continue
 
+
 if __name__ == "__main__":
     vs = VectorStoreService()
+    count = vs.ensure_index()
 
-    vs.load_document()
+    if count == 0:
+        raise SystemExit("知识库索引为空，请检查 data 目录、Embedding 配置和网络")
 
-    retriever = vs.get_retriever()
-
-    res = retriever.invoke("扫地")
-
-    for r in res:
-        print(r.page_content)    #page_content: 文本内容
-        print("-" * 20)
+    print(f"知识库索引已就绪，共 {count} 个文本块")

@@ -5,10 +5,10 @@
 ## 主要功能
 
 - ReAct Agent：根据用户问题选择知识库、天气、位置和模拟使用记录等工具。
-- RAG 检索：从 `data/` 下的 TXT/PDF 知识文件中检索相关内容。
+- 混合检索：Chroma 向量召回 + BM25 中文关键词召回，按排名融合后交给 RAG 总结。
 - 流式对话：通过 Streamlit 聊天界面逐步展示最终回答。
-- 使用报告：根据项目内的模拟用户数据生成月度报告。
-- 本地向量库：首次检索时根据知识文件生成 Chroma 索引，后续按文件变化增量更新。
+- 使用报告：根据项目内的模拟用户数据生成月度报告。演示数据目前只包含 2026-06；查询其他月份时会使用最近可用月份的记录，并在回答中明确标注。
+- 本地向量库：首次加载 RAG 工具时会自动检查并补齐 Chroma 索引，已成功入库的文件不会重复处理。
 
 ## 项目结构
 
@@ -70,9 +70,9 @@ DASHSCOPE_API_KEY = "你的 API Key"
 DASHSCOPE_BASE_URL = "https://你的服务地址/compatible-mode/v1"
 ```
 
-`secrets.toml` 已被 `.gitignore` 忽略，请勿将真实凭据提交到 Git。也可启动页面后，在左侧边栏临时输入 API Key 和 Base URL；该方式只在当前 Streamlit 会话中生效。
+`secrets.toml` 已被 `.gitignore` 忽略，请勿将真实凭据提交到 Git。也可启动页面后，在左侧边栏临时输入 API Key 和 Base URL；该方式会修改当前服务进程的环境变量，不适合多人共用的公开部署。
 
-`.env.example` 只用于展示字段，当前应用不会自动加载 `.env` 文件。
+本地开发会自动加载项目根目录的 `.env`；系统环境变量优先级更高。部署环境请使用平台环境变量或 `secrets.toml`。
 
 ## 运行
 
@@ -80,7 +80,7 @@ DASHSCOPE_BASE_URL = "https://你的服务地址/compatible-mode/v1"
 python -m streamlit run app.py
 ```
 
-打开浏览器显示的本地地址即可使用。页面本身可在未配置密钥时启动；首次提问前必须配齐 API Key 和 Base URL。首次检索会创建本地 `chroma_db/` 索引，耗时取决于网络和知识库大小。
+打开浏览器显示的本地地址即可使用。页面本身可在未配置密钥时启动；首次提问前必须配齐 API Key 和 Base URL。首次加载 RAG 工具时会检查本地 `chroma_db/` 索引；索引为空时会自动构建，耗时取决于网络和知识库大小。也可以提前运行 `python -m rag.vector_store` 检查或生成索引。
 
 ## 最小运行测试
 

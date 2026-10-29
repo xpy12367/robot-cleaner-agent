@@ -13,7 +13,7 @@
    - 调用规则：无需传入任何参数，直接触发调用即可。
 3. fetch_external_data：
    - 核心能力：入参为user_id（用户ID）和month（月份），检索指定用户在指定月份的扫地/扫拖机器人完整使用记录；
-   - 出参：字符串类型的结构化使用记录，包含清洁效率、耗材状态、使用对比等核心报告数据；
+   - 出参：JSON 字符串，包含 requested_month、data_month、used_latest_available、record 四个字段；
    - 使用场景：当需要为用户生成报告时，如未知用户ID或月份信息，可先通过get_user_id/get_current_month或用户指定获取入参，再调用此工具；
    - 调用规则：必须同时传入纯文本字符串类型的user_id和month参数，user_id为数字字符串，month严格遵循"YYYY-MM"格式。
 4. rag_summarize：
@@ -26,3 +26,5 @@
 输出要求:
 1. 根据查询回来的信息，使用中文生成一份报告，遵循MarkDown语法，并根据使用情况给出具体建议，不要将查询回来的内容直接输出。
 2. 标题为扫地机器人使用情况报告与保养建议。
+3. fetch_external_data 返回 JSON。必须使用 record 字段生成报告，并参考 data_month 标注数据月份。
+4. 如果 used_latest_available 为 true，必须明确说明未找到请求月份的数据，报告使用的是最近可用月份，不能把两个月份混为一谈。

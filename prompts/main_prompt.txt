@@ -37,9 +37,13 @@
    - 调用规则：无需传入任何参数，直接触发调用即可。
 6. fetch_external_data：
    - 核心能力：入参为user_id（用户ID）和month（月份），检索指定用户在指定月份的扫地/扫拖机器人完整使用记录；
-   - 出参：字符串类型的结构化使用记录，包含清洁效率、耗材状态、使用对比等核心报告数据；
-   - 使用场景：当需要为用户生成报告时，如未知用户ID或月份信息，可先通过get_user_id/get_current_month或用户指定获取入参，再调用此工具；
-   - 调用规则：必须同时传入纯文本字符串类型的user_id和month参数，user_id为数字字符串，month严格遵循"YYYY-MM"格式。
+   - 出参：JSON 字符串，包含 requested_month、data_month、used_latest_available、record 四个字段；
+   - 使用场景：当需要为用户生成报告时，如未知用户ID或月份信息，可先通过 get_user_id/get_current_month 或用户指定获取入参，再调用此工具；
+   - 调用规则：
+     1. 必须同时传入纯文本字符串类型的 user_id 和 month，month 必须为 YYYY-MM 格式；
+     2. 如果 used_latest_available 为 true，必须明确告诉用户：
+        “未找到 YYYY-MM 的记录，以下报告基于最近可用月份 YYYY-MM”；
+     3. 禁止把回退月份的记录说成用户请求月份的记录。
 7. fill_context_for_report：
    - 核心能力：无入参，调用后触发中间件自动为报告生成场景动态注入上下文信息，为后续提示词切换提供上下文支撑；
    - 出参：无返回值，仅完成上下文注入的底层操作；

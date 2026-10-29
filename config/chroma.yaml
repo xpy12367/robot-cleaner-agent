@@ -1,6 +1,14 @@
 collection_name: agent  # 集合名称
 persist_directory: chroma_db  # 持久化目录
 k: 3  # k值
+
+# 混合检索：向量和 BM25 各取候选，再按名次融合
+hybrid_candidate_k: 10  # 每个检索器返回的候选数量
+hybrid_vector_weight: 0.5  # 向量权重
+hybrid_bm25_weight: 0.5  # BM25 权重
+hybrid_rrf_k: 60  # RRF 算法的 k 值
+
+# 数据路径
 data_path: data  # 数据路径
 md5_hex_store: md5.text  # md5存储
 allow_knowledge_file_type: ["txt", "pdf"]  # 允许的知识文件类型

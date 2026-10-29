@@ -56,7 +56,7 @@ def get_user_city_by_ip() -> str:
     return city.replace("市", "").strip() #city.replace("市", "")：把 "深圳市" 去掉"市"，统一成 "深圳"，方便后面当参数传。
 
 
-#天气接口要的不是城市名，而是行政区划代码 adcode（一串数字，如深圳是 440300）
+# 天气接口要的不是城市名，而是行政区划代码 adcode（一串数字，如深圳是 440300）
 def _city_to_adcode(city: str, key: str) -> str:
     """城市名 -> 高德adcode（天气接口入参）"""
     data = _http_get_json(
@@ -127,51 +127,78 @@ def get_user_id() -> str:
 def get_current_month() -> str:
     return datetime.now().strftime("%Y-%m")
 
+
 def generate_external_data():
     """
-    {
-        "user_id": {
-            "month" : {"特征": xxx, "效率": xxx, ...}
-            "month" : {"特征": xxx, "效率": xxx, ...}
-            "month" : {"特征": xxx, "效率": xxx, ...}
-            ...
-        },
+    读取演示用户使用记录。
+    原始日期如 2026-06-01，会统一转换为月份 2026-06。
     """
-    if not external_data:
-        external_data_path = get_abs_path(agent_config["external_data_path"])
+    if external_data:
+        return
 
-        if not os.path.exists(external_data_path):#如果路径不存在
-            raise FileNotFoundError(f"外部数据文件{external_data_path}不存在")
-        with open(external_data_path, "r", encoding="utf-8") as f:
-            for line in f.readlines()[1:]:  # readlines(): 读取所有行并返回一个列表
-                arr: list[str] = line.strip().split(",")    #strip(): 去除行首行尾的换行符    split(","): 以逗号为分隔符，将行内容分割成列表
+    external_data_path = get_abs_path(agent_config["external_data_path"])
 
-                user_id: str = arr[0].replace('"', "")  # replace: 替换字符串中的指定字符
-                feature: str = arr[1].replace('"', "")  # 特征(户型/人群/地板)
-                efficiency: str = arr[2].replace('"', "")   # 清洁效率
-                consumables: str = arr[3].replace('"', "")  # 耗材
-                comparison: str = arr[4].replace('"', "")   # 对比
-                time: str = arr[5].replace('"', "") # 月份,如 2026-06-01
+    if not os.path.exists(external_data_path):
+        raise FileNotFoundError(f"外部数据文件{external_data_path}不存在")
 
-                if user_id not in external_data:
-                    external_data[user_id] = {}
+    with open(external_data_path, "r", encoding="utf-8-sig", newline="") as f:
+        for row in csv.DictReader(f): # 读取CSV文件，返回一个字典列表
+            user_id = (row.get("用户ID") or "").strip()
+            date_text = (row.get("时间") or "").strip()
 
-                external_data[user_id][time] = {
-                    "特征": feature,
-                    "效率": efficiency,
-                    "耗材": consumables,
-                    "对比": comparison,
-                }
+            if not user_id or len(date_text) < 7:
+                logger.warning(f"[generate_external_data]跳过无效记录: {row}")
+                continue
 
-@tool(description="从外部系统中获取指定用户在指定月份的使用记录。以纯字符串形式返回， 如果未检索到返回空字符串")
+            month = date_text[:7]
+
+            external_data.setdefault(user_id, {})[month] = {
+                "特征": (row.get("特征") or "").strip(),
+                "效率": (row.get("清洁效率") or "").strip(),
+                "耗材": (row.get("耗材") or "").strip(),
+                "对比": (row.get("对比") or "").strip(),
+            }
+
+    logger.info(f"[generate_external_data]已加载 {len(external_data)} 个演示用户")
+
+
+@tool(
+    description=(
+        "从外部系统获取指定用户在指定月份的使用记录。"
+        "返回 JSON 字符串；如果指定月份不存在，会返回最近可用月份，"
+        "并通过 used_latest_available 字段明确标记。"
+    )
+)
 def fetch_external_data(user_id: str, month: str) -> str:
     generate_external_data()
 
-    try:
-        return external_data[user_id][month]
-    except KeyError:
-        logger.warning(f"[fetch_external_data]未能检索到用户：{user_id}在{month}的使用记录数据")
+    user_records = external_data.get(user_id)
+    if not user_records:
+        logger.warning(f"[fetch_external_data]未找到用户 {user_id} 的使用记录")
         return ""
+
+    requested_month = month.strip()[:7]
+
+    if requested_month in user_records:
+        data_month = requested_month
+        used_latest_available = False
+    else:
+        data_month = max(user_records)
+        used_latest_available = True
+        logger.warning(
+            f"[fetch_external_data]用户 {user_id} 没有 {requested_month} 的记录，"
+            f"回退到最近可用月份 {data_month}"
+        )
+
+    payload = {
+        "requested_month": requested_month,
+        "data_month": data_month,
+        "used_latest_available": used_latest_available,
+        "record": user_records[data_month],
+    }
+
+    return json.dumps(payload, ensure_ascii=False) # 转换为 JSON 字符串，确保中文字符正常显示
+
 
 @tool(description="无入参，无返回值，调用后触发中间件自动为报告生成的场景动态注入上下文信息，为后续提示词切换提供上下文信息")
 def fill_context_for_report():
