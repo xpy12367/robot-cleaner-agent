@@ -15,9 +15,12 @@ from itertools import chain
 from urllib.parse import urlparse
 import yaml
 import streamlit as st
+from dotenv import load_dotenv
 
 # 将项目根目录加入模块搜索路径,确保页面内可以导入 agent / rag / utils 等包
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+load_dotenv(os.path.join(PROJECT_ROOT, ".env"), override=False)
+# override=False ：如果系统环境变量里已经有值，就优先使用系统环境变量；没有时才读取 .env
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
@@ -56,12 +59,24 @@ def load_agent_config() -> dict:
         return yaml.safe_load(f)
 
 
-@st.cache_resource(show_spinner="正在初始化智能客服(首次加载约需数秒)…")
+@st.cache_resource(show_spinner="正在初始化智能客服并检查知识库…")
 def get_agent():
-    """懒加载并缓存智能体实例:第一次提问时才导入后端模块并完成初始化"""
+    """
+    懒加载并缓存智能体实例:第一次提问时才导入后端模块并完成初始化
+
+    注意: 使用Streamlit的session_id作为Agent的会话ID,确保每个用户有独立的记忆
+    """
     from agent.react_agent import ReactAgent
 
-    return ReactAgent()
+    # 获取Streamlit的session_id作为唯一标识
+    # 如果没有session_id（旧版本Streamlit），使用默认值
+    session_id = getattr(st.session_state, "_session_id", "default")
+
+    return ReactAgent(
+        session_id=session_id,
+        enable_memory=True,  # 启用会话记忆
+        max_history_turns=5   # 保留最近5轮对话
+    )
 
 
 @st.cache_data(ttl="10m", max_entries=1)
@@ -204,10 +219,19 @@ def confirm_clear():
     """弹窗确认后清空当前会话记录"""
     st.write("确定要清空当前会话记录吗?智能客服将重新开始对话。")
     left, right = st.columns(2)
-    if left.button("清空", type="primary", width="stretch"):
+    if left.button("清空", type="primary", use_container_width=True):
+        # 清空Streamlit前端的消息历史
         st.session_state.messages = [{"role": "assistant", "content": WELCOME_MESSAGE}]
+
+        # 清空Agent的会话记忆
+        try:
+            agent = get_agent()
+            agent.clear_memory()
+        except Exception as e:
+            st.error(f"清空Agent记忆失败: {e}")
+
         st.rerun()
-    if right.button("取消", width="stretch"):
+    if right.button("取消", use_container_width=True):
         st.rerun()
 
 
@@ -243,7 +267,7 @@ with st.sidebar:
         st.markdown(":green[● 服务运行中]")
     else:
         st.markdown(":orange[● 等待首次提问]")
-        st.caption("首次提问时会自动加载智能体,约需数秒")
+        st.caption("首次提问时会检查知识库；首次构建可能需要数分钟")
 
     st.markdown("---")
 
@@ -313,6 +337,20 @@ with st.sidebar:
         st.markdown(f"- 对话模型:**{agent_cfg.get('chat_model_name', '-')}**")
         st.markdown(f"- 向量模型:**{agent_cfg.get('embedding_model_name', '-')}**")
         st.markdown(f"- 知识文件:**{len(knowledge_files())} 份**")
+
+        # 显示会话记忆状态
+        if st.session_state.get("agent_ready"):
+            try:
+                agent = get_agent()
+                if agent.enable_memory:
+                    turn_count = agent.memory.get_turn_count() if agent.memory else 0
+                    st.markdown(f"- 记忆轮次:**{turn_count}/{agent.max_history_turns} 轮**")
+                    st.caption("超过最大轮次后会自动清理最早的对话")
+                else:
+                    st.markdown("- 会话记忆:**未启用**")
+            except Exception:
+                pass
+
         st.caption("知识库来源:data 目录下的官方知识文档与外部使用记录")
 
     st.caption("智能客服前端 v1.0 · Powered by Streamlit")
