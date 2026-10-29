@@ -353,6 +353,65 @@ with st.sidebar:
 
         st.caption("知识库来源:data 目录下的官方知识文档与外部使用记录")
 
+    # —— 工具调用监控 ——
+    with st.expander("工具调用监控", expanded=False):
+        if st.session_state.get("agent_ready"):
+            try:
+                from agent.tools.monitor_enhanced import get_metrics
+
+                metrics = get_metrics()
+                all_stats = metrics.get_all_stats()
+
+                if all_stats:
+                    # 总体统计
+                    total_calls = sum(s["call_count"] for s in all_stats.values())
+                    total_failures = sum(s["failure_count"] for s in all_stats.values())
+                    overall_success = (
+                        (total_calls - total_failures) / total_calls * 100
+                        if total_calls > 0
+                        else 100
+                    )
+
+                    st.markdown(f"**总调用次数**: {total_calls}")
+                    st.markdown(f"**总体成功率**: {overall_success:.1f}%")
+                    st.markdown("---")
+
+                    # 各工具详情
+                    st.markdown("**各工具统计**")
+                    for tool_name, stat in sorted(
+                        all_stats.items(), key=lambda x: -x[1]["call_count"]
+                    ):
+                        with st.container():
+                            col1, col2 = st.columns([2, 1])
+                            with col1:
+                                st.markdown(f"**{tool_name}**")
+                                st.caption(
+                                    f"调用{stat['call_count']}次 · "
+                                    f"平均{stat['avg_duration']:.2f}秒"
+                                )
+                            with col2:
+                                success_color = "green" if stat["success_rate"] >= 90 else "orange"
+                                st.markdown(
+                                    f":{success_color}[{stat['success_rate']:.0f}%]"
+                                )
+
+                    # 最近调用
+                    recent = metrics.get_recent_calls(limit=3)
+                    if recent:
+                        st.markdown("---")
+                        st.markdown("**最近调用**")
+                        for call in recent:
+                            status_icon = "✓" if call["success"] else "✗"
+                            st.caption(
+                                f"{status_icon} {call['tool_name']}: {call['duration']:.2f}秒"
+                            )
+                else:
+                    st.markdown("_暂无工具调用记录_")
+            except Exception as e:
+                st.caption(f"监控数据加载失败: {str(e)}")
+        else:
+            st.markdown("_等待首次提问后显示监控数据_")
+
     st.caption("智能客服前端 v1.0 · Powered by Streamlit")
 
 # ==================== 聊天区 ====================

@@ -225,7 +225,7 @@ class ConversationMemory:
 class MemoryManager:
     """记忆管理器工厂类 - 管理多个会话的记忆实例"""
 
-    _instances: Dict[str, ConversationMemory] = {}
+    _instances: Dict[str, ConversationMemory] = {}  # 会话记忆实例字典
 
     @classmethod
     def get_memory(
