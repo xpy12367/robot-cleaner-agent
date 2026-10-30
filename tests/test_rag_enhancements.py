@@ -25,6 +25,9 @@ def test_dynamic_weight_adjuster():
         ("为什么这个机器人这么贵?", QueryType.REASONING, "推理性查询"),
         ("扫拖一体机和纯扫地机的区别?", QueryType.COMPARISON, "对比性查询"),
         ("扫地机器人怎么清理?", QueryType.INSTRUCTION, "操作指导查询"),
+        # 回归用例：短词嵌在长词里时不应重复命中
+        ("这个效果怎么样?", QueryType.FACTUAL, "'怎么样'不应同时命中'怎么'"),
+        ("扫拖一体和扫地机的区别是什么?", QueryType.COMPARISON, "匹配数相同时对比类优先"),
     ]
 
     print("\n测试查询分类和权重调整:")
@@ -39,7 +42,13 @@ def test_dynamic_weight_adjuster():
             kw_list = ', '.join([kw for kws in analysis['matched_keywords'].values() for kw in kws])
             print(f"  匹配关键词: {kw_list}")
 
-        # 验证权重之和为1.0
+        # 验证分类结果
+        assert analysis['query_type'] == expected_type.value, \
+            f"{query!r} 应分类为 {expected_type.value}，实际为 {analysis['query_type']}"
+
+        # 验证权重与预设一致，且之和为1.0
+        assert (analysis['vector_weight'], analysis['bm25_weight']) == \
+            adjuster.weight_presets[expected_type], "权重应与分类对应的预设一致"
         assert abs(analysis['vector_weight'] + analysis['bm25_weight'] - 1.0) < 0.01, \
             "权重之和应为1.0"
 
@@ -133,20 +142,19 @@ def test_edge_cases():
     adjuster = DynamicWeightAdjuster()
 
     edge_cases = [
-        "",  # 空查询
-        "   ",  # 空格
-        "哈哈哈",  # 无关键词
-        "能否为什么怎么",  # 多个关键词
-        "！@#$%^&*()",  # 只有标点符号
+        ("", QueryType.UNKNOWN),  # 空查询
+        ("   ", QueryType.UNKNOWN),  # 空格
+        ("哈哈哈", QueryType.UNKNOWN),  # 无关键词
+        ("能否为什么怎么", QueryType.REASONING),  # 多个关键词：推理类命中2个
+        ("！@#$%^&*()", QueryType.UNKNOWN),  # 只有标点符号
     ]
 
     print("\n测试边界情况:")
-    for i, query in enumerate(edge_cases, 1):
-        try:
-            analysis = adjuster.get_query_analysis(query)
-            print(f"  {i}. 查询'{query}' → 类型: {analysis['query_type']}")
-        except Exception as e:
-            print(f"  {i}. 查询'{query}' → 出错: {e}")
+    for i, (query, expected_type) in enumerate(edge_cases, 1):
+        analysis = adjuster.get_query_analysis(query)
+        print(f"  {i}. 查询'{query}' → 类型: {analysis['query_type']}")
+        assert analysis['query_type'] == expected_type.value, \
+            f"{query!r} 应分类为 {expected_type.value}，实际为 {analysis['query_type']}"
 
     print(f"\n[OK] 边界情况测试通过\n")
 

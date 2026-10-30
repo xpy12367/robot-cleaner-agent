@@ -94,7 +94,13 @@ def fetch_city_weather(city: str) -> str:
     )
 
 
-@tool(description="从向量存储中检索参考资料")  # description: 描述工具的功能
+@tool(
+    description=(
+        "从扫地/扫拖机器人知识库中检索参考资料并总结。"
+        "query 必须是脱离对话上下文也能理解的完整检索短语："
+        "指代词替换成具体对象，口语换成规范用语，只保留关键名词"
+    )
+)  # description: 描述工具的功能，模型据此决定何时调用、怎么写参数
 def rag_summarize(query: str) -> str:
     return rag.Rag_summarize(query)
 

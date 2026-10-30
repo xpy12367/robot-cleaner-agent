@@ -11,26 +11,28 @@ from agent.tools.agent_tools import (
 )
 from agent.tools.middleware import monitor_tool, log_before_model, report_prompt_switch
 from utils.prompt_loader import load_system_prompts
-from agent.memory_manager import MemoryManager
+from agent.memory_manager import ConversationMemory, MemoryManager
 from utils.logger_handler import logger
+
+DEFAULT_SESSION_ID = "default"
 
 
 class ReactAgent:
     def __init__(
         self,
-        session_id: str = "default",
         enable_memory: bool = True,
         max_history_turns: int = 5,
     ):
         """
         初始化ReactAgent
 
+        Agent 实例本身不保存会话状态，可以被多个会话共用；
+        会话记忆由 MemoryManager 按 session_id 隔离，每次调用时传入 session_id。
+
         Args:
-            session_id: 会话唯一标识符，不同用户应使用不同ID
             enable_memory: 是否启用会话记忆
             max_history_turns: 最大记忆轮次（一问一答算一轮）
         """
-        self.session_id = session_id
         self.enable_memory = enable_memory
         self.max_history_turns = max_history_turns
 
@@ -50,43 +52,51 @@ class ReactAgent:
             middleware=[monitor_tool, log_before_model, report_prompt_switch],
         )
 
-        # 初始化记忆管理器
-        if self.enable_memory:
-            self.memory = MemoryManager.get_memory(
-                session_id=session_id,
-                max_turns=max_history_turns,
-                max_tokens=4000,
-                enable_persistence=False,  # 默认不持久化，避免隐私问题
-            )
-            logger.info(
-                f"[ReactAgent] 已启用会话记忆 (session_id={session_id}, max_turns={max_history_turns})"
-            )
-        else:
-            self.memory = None
-            logger.info(f"[ReactAgent] 未启用会话记忆")
+        logger.info(
+            f"[ReactAgent] 已初始化 (会话记忆={enable_memory}, max_turns={max_history_turns})"
+        )
 
-    def execute_stream(self, query: str):
+    def get_memory(self, session_id: str = DEFAULT_SESSION_ID) -> ConversationMemory | None:
+        """获取指定会话的记忆；未启用记忆时返回 None"""
+        if not self.enable_memory:
+            return None
+        return MemoryManager.get_memory(
+            session_id=session_id,
+            max_turns=self.max_history_turns,
+            max_tokens=4000,
+            enable_persistence=False,  # 默认不持久化，避免隐私问题
+        )
+
+    def _build_input(self, query: str, memory: ConversationMemory | None) -> dict:
+        """把历史对话 + 当前问题包成 Agent 认识的"对话消息"格式"""
+        messages = []
+        if memory:
+            history_messages = memory.get_recent_messages(num_turns=self.max_history_turns)
+            messages.extend(history_messages)
+            logger.debug(f"[ReactAgent] 加载 {len(history_messages)} 条历史消息")
+
+        messages.append({"role": "user", "content": query})
+        return {"messages": messages}
+
+    def _save_turn(self, memory: ConversationMemory | None, query: str, answer: str) -> None:
+        """把本轮问答写入会话记忆"""
+        if not memory:
+            return
+        memory.add_user_message(query)
+        memory.add_assistant_message(answer.strip())
+        logger.info(f"[ReactAgent] 已保存对话到记忆 (当前轮次: {memory.get_turn_count()})")
+
+    def execute_stream(self, query: str, session_id: str = DEFAULT_SESSION_ID):
         """
         执行流式输出：
         :param query: 用户问题
+        :param session_id: 会话ID，不同会话的记忆互相隔离
         :return: 生成器，逐段产出模型回答文本
         """
-        # 1. 构建消息列表：历史对话 + 当前问题
-        messages = []
-        if self.enable_memory and self.memory:
-            # 获取历史对话（最近N轮）
-            history_messages = self.memory.get_recent_messages(
-                num_turns=self.max_history_turns
-            )
-            messages.extend(history_messages)  # 扩展消息列表
-            logger.debug(f"[ReactAgent] 加载 {len(history_messages)} 条历史消息")
+        memory = self.get_memory(session_id)
+        input_dict = self._build_input(query, memory)
 
-        # 添加当前用户问题
-        messages.append({"role": "user", "content": query})
-
-        input_dict = {"messages": messages}
-
-        # 2. 执行流式推理
+        # context={"report": False} —— 传给运行时的自定义上下文，用于提示词切换
         full_response = ""
         for chunk in self.agent.stream(
             input_dict, stream_mode="values", context={"report": False}
@@ -97,40 +107,21 @@ class ReactAgent:
                 full_response += content
                 yield content
 
-        # 3. 保存到记忆
-        if self.enable_memory and self.memory:
-            self.memory.add_user_message(query)
-            self.memory.add_assistant_message(full_response.strip())
-            logger.info(
-                f"[ReactAgent] 已保存对话到记忆 (当前轮次: {self.memory.get_turn_count()})"
-            )
+        self._save_turn(memory, query, full_response)
 
-    def execute_chat_stream(self, query: str):
+    def execute_chat_stream(self, query: str, session_id: str = DEFAULT_SESSION_ID):
         """
         面向 Web 前端(Streamlit 页面)的流式输出：
         只产出最终回答的文本增量，自动过滤模型思考过程、工具内部输出等中间消息，
         以便前端实现逐字输出的打字机效果
         :param query: 用户问题
+        :param session_id: 会话ID，不同会话的记忆互相隔离
         :return: 生成器，逐段产出最终回答文本
         """
-        # 1. 构建消息列表：历史对话 + 当前问题
-        messages = []
-        if self.enable_memory and self.memory:
-            # 获取历史对话（最近N轮）
-            history_messages = self.memory.get_recent_messages(
-                num_turns=self.max_history_turns
-            )
-            messages.extend(history_messages)
-            logger.debug(
-                f"[ReactAgent.execute_chat_stream] 加载 {len(history_messages)} 条历史消息"
-            )
+        memory = self.get_memory(session_id)
+        input_dict = self._build_input(query, memory)
 
-        # 添加当前用户问题
-        messages.append({"role": "user", "content": query})
-
-        input_dict = {"messages": messages}
-
-        # 2. 执行流式推理（token级）
+        # stream_mode="messages"：token 级流式输出，每次产出 (消息块, 元数据)
         full_response = ""
         for chunk, metadata in self.agent.stream(
             input_dict, stream_mode="messages", context={"report": False}
@@ -142,29 +133,22 @@ class ReactAgent:
                 full_response += chunk.content
                 yield chunk.content
 
-        # 3. 保存到记忆
-        if self.enable_memory and self.memory:
-            self.memory.add_user_message(query)
-            self.memory.add_assistant_message(full_response.strip())
-            logger.info(
-                f"[ReactAgent.execute_chat_stream] 已保存对话到记忆 (当前轮次: {self.memory.get_turn_count()})"
-            )
+        self._save_turn(memory, query, full_response)
 
-    def clear_memory(self) -> None:
-        """清空当前会话的记忆"""
-        if self.enable_memory and self.memory:
-            self.memory.clear()
-            logger.info(f"[ReactAgent] 已清空会话记忆 (session_id={self.session_id})")
+    def clear_memory(self, session_id: str = DEFAULT_SESSION_ID) -> None:
+        """清空指定会话的记忆"""
+        if self.enable_memory:
+            MemoryManager.clear_memory(session_id)
+            logger.info(f"[ReactAgent] 已清空会话记忆 (session_id={session_id})")
 
-    def get_memory_summary(self) -> str:
-        """获取当前记忆摘要（用于调试或展示）"""
-        if not self.enable_memory or not self.memory:
+    def get_memory_summary(self, session_id: str = DEFAULT_SESSION_ID) -> str:
+        """获取指定会话的记忆摘要（用于调试或展示）"""
+        memory = self.get_memory(session_id)
+        if not memory:
             return "记忆功能未启用"
 
-        turn_count = self.memory.get_turn_count()
-        summary = self.memory.get_summary_context(max_chars=300)
-
-        return f"当前记忆轮次: {turn_count}\n最近对话摘要:\n{summary}"
+        summary = memory.get_summary_context(max_chars=300)
+        return f"当前记忆轮次: {memory.get_turn_count()}\n最近对话摘要:\n{summary}"
 
 
 if __name__ == "__main__":

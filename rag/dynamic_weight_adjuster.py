@@ -38,27 +38,35 @@ class DynamicWeightAdjuster:
         "哪个", "哪些", "哪种", "型号", "品牌", "价格", "多少钱",
         "什么", "是什么", "几个", "几种", "怎样", "怎么样",
         "规格", "尺寸", "参数", "配置", "性能指标"
-    }
+    }  # 事实性问题关键词
 
     REASONING_KEYWORDS = {
         "为什么", "为何", "能不能", "会不会", "可不可以",
         "是否", "能否", "应该", "建议", "合适",
         "适不适合", "如何判断", "怎么判断", "如何评估",
         "原因是", "原理", "机制", "推荐"
-    }
+    }  # 推理性问题关键词
 
     COMPARISON_KEYWORDS = {
         "对比", "比较", "区别", "差异", "不同",
         "哪个好", "哪个更", "优劣", "相比", "与其他",
         "相似", "不同点", "共同点", "优势", "劣势"
-    }
+    }  # 对比性问题关键词
 
     INSTRUCTION_KEYWORDS = {
         "怎么", "如何", "怎样做", "步骤", "流程",
         "方法", "技巧", "操作", "使用", "安装",
         "调试", "设置", "配置", "清理", "维护",
         "保养", "修理", "故障排除", "排查"
-    }
+    }  # 操作指导性关键词
+
+    # 匹配数相同时的优先级（越靠前越优先）
+    _TIE_BREAK_PRIORITY = [
+        QueryType.COMPARISON,
+        QueryType.REASONING,
+        QueryType.INSTRUCTION,
+        QueryType.FACTUAL,
+    ]
 
     def __init__(
         self,
@@ -76,6 +84,8 @@ class DynamicWeightAdjuster:
         """
         assert abs((default_vector_weight + default_bm25_weight) - 1.0) < 0.01, \
             "向量权重 + BM25权重必须等于1.0"
+            # abs(): 计算绝对值，确保权重和为1.0
+            # assert: 条件成立时不管,不成立时直接报错停下
 
         self.default_vector_weight = default_vector_weight
         self.default_bm25_weight = default_bm25_weight
@@ -96,6 +106,41 @@ class DynamicWeightAdjuster:
             f"| 启用调整: {enable_adjustment}"
         )
 
+    def _match_keywords(self, query: str) -> dict[QueryType, list[str]]:
+        """
+        找出查询命中的各类关键词。
+
+        按关键词长度从长到短匹配，命中的部分从文本中抹掉，
+        避免短词在长词内部重复命中（如"为什么"里的"什么"、"怎么样"里的"怎么"）。
+        """
+        # 移除标点符号，便于关键词匹配
+        text = re.sub(r'[\.，。？！?!;；,\-\+\/\(\)（）]', '', query.lower())
+
+        keyword_types = [
+            (kw, query_type)
+            for query_type, keywords in (
+                (QueryType.FACTUAL, self.FACTUAL_KEYWORDS),
+                (QueryType.REASONING, self.REASONING_KEYWORDS),
+                (QueryType.COMPARISON, self.COMPARISON_KEYWORDS),
+                (QueryType.INSTRUCTION, self.INSTRUCTION_KEYWORDS),
+            )
+            for kw in keywords
+        ]
+        # 长词优先；同长度按字典序，保证结果稳定
+        keyword_types.sort(key=lambda item: (-len(item[0]), item[0]))
+
+        matched: dict[QueryType, list[str]] = {
+            QueryType.FACTUAL: [],
+            QueryType.REASONING: [],
+            QueryType.COMPARISON: [],
+            QueryType.INSTRUCTION: [],
+        }
+        for kw, query_type in keyword_types:
+            if kw in text:
+                matched[query_type].append(kw)
+                text = text.replace(kw, "\0")  # 用占位符抹掉，防止拼出新词
+        return matched
+
     def classify_query(self, query: str) -> QueryType:
         """
         对查询进行分类
@@ -106,32 +151,25 @@ class DynamicWeightAdjuster:
         Returns:
             QueryType枚举值
         """
-        query_lower = query.lower()
+        matched = self._match_keywords(query)
 
-        # 移除标点符号，便于关键词匹配
-        query_clean = re.sub(r'[\.，。？！;；,\-\+\/\(\)（）]', '', query_lower)
-
-        # 计算各类型的匹配度
-        factual_matches = sum(1 for kw in self.FACTUAL_KEYWORDS if kw in query_clean)
-        reasoning_matches = sum(1 for kw in self.REASONING_KEYWORDS if kw in query_clean)
-        comparison_matches = sum(1 for kw in self.COMPARISON_KEYWORDS if kw in query_clean)
-        instruction_matches = sum(1 for kw in self.INSTRUCTION_KEYWORDS if kw in query_clean)
-
-        # 找出匹配度最高的类型
-        match_counts = {
-            QueryType.FACTUAL: factual_matches,
-            QueryType.REASONING: reasoning_matches,
-            QueryType.COMPARISON: comparison_matches,
-            QueryType.INSTRUCTION: instruction_matches
-        }
+        # 各类型的匹配度
+        match_counts = {query_type: len(kws) for query_type, kws in matched.items()}
 
         # 过滤掉0匹配
         non_zero_matches = {k: v for k, v in match_counts.items() if v > 0}
+        # k: 问题类型, v: 匹配度
 
         if not non_zero_matches:
             query_type = QueryType.UNKNOWN
         else:
-            query_type = max(non_zero_matches, key=non_zero_matches.get)
+            # 匹配数相同时按 _TIE_BREAK_PRIORITY 取：事实类关键词("什么""是什么")太泛，信号最弱
+            query_type = max(
+                non_zero_matches,
+                key=lambda qt: (non_zero_matches[qt], -self._TIE_BREAK_PRIORITY.index(qt)),
+            )
+            # max(): 找出匹配度最高的问题类型
+            # key=non_zero_matches.get: 按匹配度排序
 
         logger.debug(
             f"[DynamicWeightAdjuster] 查询分类: {query_type.value} | "
@@ -180,15 +218,9 @@ class DynamicWeightAdjuster:
         query_type = self.classify_query(query)
         vector_weight, bm25_weight = self.weight_presets[query_type]
 
-        query_lower = query.lower()
-        query_clean = re.sub(r'[\.，。？！;；,\-\+\/\(\)（）]', '', query_lower)
-
         # 提取匹配的关键词
         matched_keywords = {
-            "factual": [kw for kw in self.FACTUAL_KEYWORDS if kw in query_clean],
-            "reasoning": [kw for kw in self.REASONING_KEYWORDS if kw in query_clean],
-            "comparison": [kw for kw in self.COMPARISON_KEYWORDS if kw in query_clean],
-            "instruction": [kw for kw in self.INSTRUCTION_KEYWORDS if kw in query_clean]
+            qt.value: kws for qt, kws in self._match_keywords(query).items()
         }
 
         return {

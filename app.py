@@ -11,6 +11,7 @@
 """
 import os
 import sys
+import uuid
 from itertools import chain
 from urllib.parse import urlparse
 import yaml
@@ -64,19 +65,22 @@ def get_agent():
     """
     懒加载并缓存智能体实例:第一次提问时才导入后端模块并完成初始化
 
-    注意: 使用Streamlit的session_id作为Agent的会话ID,确保每个用户有独立的记忆
+    Agent 本身不保存会话状态,所有会话共用一个实例;
+    会话记忆按 session_id 隔离,调用时通过 get_session_id() 传入
     """
     from agent.react_agent import ReactAgent
 
-    # 获取Streamlit的session_id作为唯一标识
-    # 如果没有session_id（旧版本Streamlit），使用默认值
-    session_id = getattr(st.session_state, "_session_id", "default")
-
     return ReactAgent(
-        session_id=session_id,
         enable_memory=True,  # 启用会话记忆
         max_history_turns=5   # 保留最近5轮对话
     )
+
+
+def get_session_id() -> str:
+    """当前浏览器会话的唯一ID:首次访问时生成并存入 session_state,刷新页面会重新生成"""
+    if "agent_session_id" not in st.session_state:
+        st.session_state["agent_session_id"] = uuid.uuid4().hex
+    return st.session_state["agent_session_id"]
 
 
 @st.cache_data(ttl="10m", max_entries=1)
@@ -186,7 +190,7 @@ def handle_prompt(question: str) -> None:
         try:
             # 模型思考与工具调用阶段可能持续数秒,先用等待提示占位
             with st.spinner("正在思考,检索知识库 / 调用工具…"):
-                stream = get_agent().execute_chat_stream(question)
+                stream = get_agent().execute_chat_stream(question, session_id=get_session_id())
                 # 阻塞至第一个文本 token,即思考阶段结束(后续交给 write_stream 流式渲染)
                 first_chunk = next(stream, None)
             st.session_state["agent_ready"] = True
@@ -225,8 +229,7 @@ def confirm_clear():
 
         # 清空Agent的会话记忆
         try:
-            agent = get_agent()
-            agent.clear_memory()
+            get_agent().clear_memory(session_id=get_session_id())
         except Exception as e:
             st.error(f"清空Agent记忆失败: {e}")
 
@@ -343,7 +346,7 @@ with st.sidebar:
             try:
                 agent = get_agent()
                 if agent.enable_memory:
-                    turn_count = agent.memory.get_turn_count() if agent.memory else 0
+                    turn_count = agent.get_memory(get_session_id()).get_turn_count()
                     st.markdown(f"- 记忆轮次:**{turn_count}/{agent.max_history_turns} 轮**")
                     st.caption("超过最大轮次后会自动清理最早的对话")
                 else:
