@@ -16,4 +16,4 @@ allow_knowledge_file_type: ["txt", "pdf"]  # 允许的知识文件类型
 #分割器
 chunk_size: 200   # 每个chunk的大小
 chunk_overlap: 20   # 每个chunk的重叠部分
-separators: ["\n\n", "\n", ".", "!", "?", ".", "!", "?", " ", ""] #separators:
+separators: ["\n\n", "\n", "。", "！", "？", "；", "，", " ", ""] #separators:

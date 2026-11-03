@@ -1,0 +1,18 @@
+# 同义词扩展配置
+enable_synonym_expansion: true  # 是否启用同义词扩展
+
+# 查询改写配置
+enable_query_rewrite: true  # 是否启用查询改写
+query_rewrite_count: 3  # 改写查询数量
+query_rewrite_similarity_filter: true  # 是否过滤相似查询
+query_rewrite_similarity_threshold: 0.85  # 相似度阈值
+query_rewrite_prompt_path: prompts/query_rewrite.txt  # 改写提示词路径
+
+# 交叉编码器重排配置
+enable_reranking: true  # 是否启用交叉编码器重排
+reranker_model: BAAI/bge-reranker-base  # 重排模型名称
+reranker_top_k: 20  # 重排前的候选数量
+reranker_score_threshold: null  # 分数阈值，低于此分数的文档会被过滤（null表示不过滤）
+
+# 动态权重调整配置
+enable_dynamic_weight: true  # 是否启用动态权重调整

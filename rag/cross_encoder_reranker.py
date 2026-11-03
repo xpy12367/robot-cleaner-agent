@@ -9,7 +9,7 @@ from utils.logger_handler import logger
 
 try:
     from sentence_transformers import CrossEncoder
-    HAS_CROSS_ENCODER = True
+    HAS_CROSS_ENCODER = True # 是否有CrossEncoder模型
 except ImportError:
     HAS_CROSS_ENCODER = False
     logger.warning("[CrossEncoderReranker] sentence-transformers未安装，重排功能将被禁用")
@@ -34,11 +34,11 @@ class CrossEncoderReranker:
 
     def __init__(
         self,
-        model_name: str = "BAAI/bge-reranker-base",
+        model_name: str = "BAAI/bge-reranker-base",  # 重排模型ID
         batch_size: int = 32,
         max_length: int = 512,
         score_threshold: Optional[float] = None,
-        enable_reranking: bool = True
+        enable_reranking: bool = True,
     ):
         """
         初始化交叉编码器
@@ -114,8 +114,8 @@ class CrossEncoderReranker:
             scores = self.model.predict(
                 query_doc_pairs,
                 batch_size=self.batch_size,
-                convert_to_numpy=True
-            )
+                convert_to_numpy=True,  # 转换为NumPy数组
+            )  # predict 方法返回一个NumPy数组，每个元素是查询与文档的相关性分数
 
             # 创建(文档, 分数)对
             doc_score_pairs = list(zip(documents, scores))
@@ -139,12 +139,15 @@ class CrossEncoderReranker:
             final_scores = [float(score) for _, score in doc_score_pairs]
 
             duration = time.time() - start_time
+            # 先算好再格式化：f-string 里冒号后整段都是格式说明符,
+            # 写成 {..:.3f if final_scores else 0} 会抛 Invalid format specifier
+            avg_score = sum(final_scores) / len(final_scores) if final_scores else 0.0
 
             logger.debug(
                 f"[CrossEncoderReranker] 重排完成: "
                 f"{len(documents)}→{len(reranked_docs)}个文档 | "
                 f"耗时{duration:.3f}秒 | "
-                f"平均分数{sum(final_scores)/len(final_scores):.3f if final_scores else 0}"
+                f"平均分数{avg_score:.3f}"
             )
 
             return reranked_docs, final_scores
@@ -166,13 +169,13 @@ class CrossEncoderReranker:
             "model_name": self.model_name,
             "max_length": self.max_length,
             "batch_size": self.batch_size,
-            "device": str(self.model.device) if hasattr(self.model, 'device') else "unknown"
-        }
+            "device": (str(self.model.device) if hasattr(self.model, "device") else "unknown"),
+        }  # hasattr 检查模型是否有device属性，避免NoneType错误
 
 
 # 全局重排器实例（单例）
 _reranker_instance: Optional[CrossEncoderReranker] = None
-
+# Optional[CrossEncoderReranker] 表示_reranker_instance可以是CrossEncoderReranker的类型，也可以是None
 
 def get_reranker(
     model_name: str = "BAAI/bge-reranker-base",

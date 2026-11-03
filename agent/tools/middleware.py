@@ -12,6 +12,7 @@ def log_before_model(
     state: AgentState,          # 整个Agent智能体中的状态记录
     runtime: Runtime,           # 记录了整个执行过程中的上下文信息
 ):  # 在模型执行前输出日志
+    """在模型执行前输出日志，记录当前状态和最新消息"""
     logger.info(f"[log_before_model]即将调用模型，带有{len(state['messages'])}条消息。")
 
     logger.debug(f"[log_before_model]{type(state['messages'][-1]).__name__} | {state['messages'][-1].content.strip()}")
@@ -19,6 +20,7 @@ def log_before_model(
 
 @dynamic_prompt     # 每一次在生成提示词之前，调用此函数
 def report_prompt_switch(request:ModelRequest) -> str:
+    """根据上下文切换提示词内容"""
     is_report = request.runtime.context.get("report", False)   #"report"一般为False,如果为True则表示是报告生成场景
     if is_report:
         return load_report_prompts()  # 是报告生成场景，返回报告生成提示词内容

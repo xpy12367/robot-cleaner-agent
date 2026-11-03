@@ -3,6 +3,7 @@
 包含以下改进：
 1. 交叉编码器精排：在混合检索结果上进行语义精排
 2. 动态权重调整：根据问题类型动态调整向量/BM25权重
+3. 同义词扩展：自动补充领域同义词，提升BM25召回率
 """
 
 import re
@@ -15,6 +16,7 @@ from rank_bm25 import BM25Okapi
 from utils.logger_handler import logger
 from rag.cross_encoder_reranker import get_reranker
 from rag.dynamic_weight_adjuster import get_adjuster
+from rag.synonym_expander import get_expander
 
 _TOKEN_PATTERN = re.compile(r"[\u4e00-\u9fffA-Za-z0-9]+")
 """
@@ -54,6 +56,7 @@ class HybridRetriever:
     改进：
     1. 动态权重：根据问题类型自动调整向量/BM25的权重
     2. 交叉编码器重排：使用Cross-Encoder对结果进行精准重排
+    3. 同义词扩展：自动补充领域同义词，提升BM25召回率
     """
 
     def __init__(
@@ -61,43 +64,47 @@ class HybridRetriever:
         vector_store,
         documents: list[Document],
         *,
-        k: int = 3,
-        candidate_k: int = 10,
+        k: int = 3,  # 最终返回的文档数
+        candidate_k: int = 10,  # 初始候选文档数
         vector_weight: float = 0.5,
         bm25_weight: float = 0.5,
         rrf_k: int = 60,
         enable_reranking: bool = True,
         enable_dynamic_weight: bool = True,
-        reranker_top_k: int = 20  # 重排前的候选数量
+        enable_synonym_expansion: bool = True,
+        reranker_top_k: int = 20
     ):
         if not documents:
             raise ValueError("知识库文档为空，无法建立 BM25 索引")
 
-        self.vector_store = vector_store
-        self.documents = documents
+        self.vector_store = vector_store  # 向量存储
+        self.documents = documents  # 知识库文档
         self.k = k  # 最终返回的文档数
-        self.candidate_k = max(candidate_k, k)
-        self.default_vector_weight = vector_weight
-        self.default_bm25_weight = bm25_weight
+        self.candidate_k = max(candidate_k, k)  # 初始候选文档数
+        self.default_vector_weight = vector_weight  # 向量权重默认值
+        self.default_bm25_weight = bm25_weight  # BM25 权重默认值
         self.rrf_k = rrf_k
-        self.enable_reranking = enable_reranking
-        self.enable_dynamic_weight = enable_dynamic_weight
-        self.reranker_top_k = max(reranker_top_k, k)
+        self.enable_reranking = enable_reranking  # 是否启用交叉编码器重排
+        self.enable_dynamic_weight = enable_dynamic_weight  # 是否启用动态权重调整
+        self.enable_synonym_expansion = enable_synonym_expansion  # 是否启用同义词扩展
+        self.reranker_top_k = max(reranker_top_k, k)   # 重排前的候选数量
 
         tokenized_documents = [
             tokenize_for_search(document.page_content) or ["_empty_"]
             for document in documents
         ]
-        self.bm25 = BM25Okapi(tokenized_documents)
+        self.bm25 = BM25Okapi(tokenized_documents)  # 初始化 BM25 索引
 
         # 初始化增强模块
         self.adjuster = get_adjuster(enable_dynamic_weight) if enable_dynamic_weight else None
         self.reranker = get_reranker() if enable_reranking else None
+        self.expander = get_expander() if enable_synonym_expansion else None
 
         logger.info(
             f"[HybridRetriever] 已初始化 "
             f"| 动态权重: {enable_dynamic_weight} "
-            f"| 交叉编码器重排: {enable_reranking}"
+            f"| 交叉编码器重排: {enable_reranking} "
+            f"| 同义词扩展: {enable_synonym_expansion}"
         )
 
     def search_bm25(
@@ -109,6 +116,10 @@ class HybridRetriever:
         query_tokens = tokenize_for_search(query)
         if not query_tokens:
             return []
+
+        # 同义词扩展（可选）
+        if self.expander:
+            query_tokens = self.expander.expand(query_tokens)
 
         top_n = min(k or self.candidate_k, len(self.documents))
         scores = self.bm25.get_scores(query_tokens)
@@ -161,15 +172,15 @@ class HybridRetriever:
             (vector_weight, vector_documents),
             (bm25_weight, bm25_documents),
         ):
-            for rank, document in enumerate(documents, start=1):
+            for rank, document in enumerate(documents, start=1):  # 从1开始编号
                 key = document_key(document)
                 documents_by_key[key] = document
-                fused_scores[key] += weight / (self.rrf_k + rank)
+                fused_scores[key] += weight / (self.rrf_k + rank)  # 计算融合分数
 
         ranked_keys = sorted(
-            fused_scores,
-            key=lambda key: fused_scores[key],
-            reverse=True,
+            fused_scores,  # ① 传入字典
+            key=lambda key: fused_scores[key],  # ② 排序依据：用 key 去查分数
+            reverse=True,  # ③ 降序
         )
 
         # 获取融合结果（候选集）
@@ -186,6 +197,86 @@ class HybridRetriever:
             logger.debug(
                 f"[混合检索] 重排完成: {len(fusion_candidates)} → {len(reranked_docs)} | "
                 f"权重: vector={vector_weight:.2f}, bm25={bm25_weight:.2f}"
+            )
+
+            return reranked_docs
+        else:
+            # 如果未启用重排，直接返回融合结果的top-k
+            return fusion_candidates[:self.k]
+
+    def invoke_multi(self, queries: list[str]) -> list[Document]:
+        """
+        执行多查询融合检索
+
+        对多个查询分别执行混合检索，然后对所有结果再次融合排序。
+
+        Args:
+            queries: 查询列表（通常来自查询改写）
+
+        Returns:
+            融合后的top-k文档列表
+
+        流程：
+        1. 对每个查询执行混合检索
+        2. 收集所有候选文档
+        3. 按出现频次和平均排名融合
+        4. 使用交叉编码器重排（以第一个查询为基准）
+        """
+        if not queries:
+            return []
+
+        # 单查询降级为普通invoke
+        if len(queries) == 1:
+            return self.invoke(queries[0])
+
+        # 第1步：对每个查询执行混合检索，收集候选文档
+        all_candidates: dict[str, list[int]] = defaultdict(list)  # {doc_key: [rank1, rank2, ...]}
+        documents_by_key: dict[str, Document] = {}
+
+        for query in queries:
+            # 调用invoke获取该查询的top-k结果
+            query_results = self.invoke(query)
+
+            # 记录每个文档的排名（1-based）
+            for rank, doc in enumerate(query_results, start=1):
+                # key: 文档唯一标识
+                key = document_key(doc)
+                documents_by_key[key] = doc
+                all_candidates[key].append(rank)
+
+        # 第2步：按出现频次和平均排名融合排序
+        # 计算每个文档的融合分数：出现次数 × 平均倒数排名
+        fusion_scores: dict[str, float] = {}
+        for key, ranks in all_candidates.items():
+            # 出现频次
+            frequency = len(ranks)
+            # 平均倒数排名（RRF风格）
+            avg_reciprocal_rank = sum(1.0 / (self.rrf_k + r) for r in ranks) / len(ranks)
+            # 融合分数
+            fusion_scores[key] = frequency * avg_reciprocal_rank
+
+        # 按融合分数排序
+        ranked_keys = sorted(
+            fusion_scores,
+            key=lambda k: fusion_scores[k],
+            reverse=True,
+        )  # ranked_keys: 按融合分数排序的文档key列表
+
+        # 取top-reranker_top_k作为候选
+        fusion_candidates = [
+            documents_by_key[key] for key in ranked_keys[:self.reranker_top_k]
+        ]
+
+        # 第3步：交叉编码器重排（以第一个查询为基准）
+        if self.reranker and fusion_candidates:
+            reranked_docs, scores = self.reranker.rerank(
+                queries[0],  # 使用原始查询作为重排基准
+                fusion_candidates,
+                top_k=self.k
+            )
+
+            logger.debug(
+                f"[多查询融合] 完成: {len(queries)}个查询 → {len(fusion_candidates)}候选 → {len(reranked_docs)}结果"
             )
 
             return reranked_docs
