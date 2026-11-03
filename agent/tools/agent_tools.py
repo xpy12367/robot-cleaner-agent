@@ -1,19 +1,20 @@
 import json
 import os
 import csv
-import random
 from datetime import datetime
+from typing import Annotated
 import urllib.request   # Python 内置的发 HTTP 请求的库
 from urllib.parse import urlencode
 from langchain_core.tools import tool
+from langchain.tools import ToolRuntime
+from pydantic import Field
 from rag.rag_service import RagSummarizeService
 from utils.config_handler import agent_config
 from utils.path_tool import get_abs_path
 from utils.logger_handler import logger
+from agent.state import AgentContext
 
 rag=RagSummarizeService()
-
-user_ids = ["1001", "1002", "1003", "1004", "1005", "1006", "1007", "1008", "1009", "1010",]
 
 external_data = {}
 
@@ -102,10 +103,12 @@ def fetch_city_weather(city: str) -> str:
     )
 )  # description: 描述工具的功能，模型据此决定何时调用、怎么写参数
 def rag_summarize(query: str) -> str:
+    """调用 RagSummarizeService 检索知识库并总结结果"""
     return rag.Rag_summarize(query)
 
 @tool(description="获取指定城市的天气，以消息字符串的形式返回")
 def get_weather(city: str) -> str:
+    """调用高德天气接口查询指定城市的实时天气"""
     try:
         result = fetch_city_weather(city)
         if result:
@@ -114,24 +117,22 @@ def get_weather(city: str) -> str:
         logger.error(f"[get_weather]查询 {city} 天气异常: {e}")
     return f"抱歉，暂时无法获取城市{city}的实时天气，请稍后再试。"
 
-@tool(description="获取用户所在城市的名称，以纯字符串形式返回")
+@tool(
+    description=(
+        "获取用户所在城市的名称，以纯字符串形式返回。"
+        "定位失败时返回以「定位失败」开头的提示，此时应询问用户所在城市，不要自行猜测"
+    )
+)
 def get_user_location() -> str:
+    """通过高德IP定位获取用户所在城市"""
     try:
         city = get_user_city_by_ip()
         if city:
             return city
     except Exception as e:
         logger.error(f"[get_user_location]IP定位异常: {e}")
-    logger.warning("[get_user_location]IP定位失败，回退到示例城市")
-    return random.choice(["深圳", "合肥", "杭州"])
-
-@tool(description="获取用户的ID，以纯字符串形式返回")
-def get_user_id() -> str:
-    return random.choice(user_ids)
-
-@tool(description="获取当前月份，以纯字符申形式返回")
-def get_current_month() -> str:
-    return datetime.now().strftime("%Y-%m")
+    logger.warning("[get_user_location]IP定位失败")
+    return "定位失败：无法获取用户所在城市"
 
 
 def generate_external_data():
@@ -163,27 +164,61 @@ def generate_external_data():
                 "效率": (row.get("清洁效率") or "").strip(),
                 "耗材": (row.get("耗材") or "").strip(),
                 "对比": (row.get("对比") or "").strip(),
-            }
+            }  # setdefault(user_id, {}): 确保每个用户有一个空字典，避免报错
 
     logger.info(f"[generate_external_data]已加载 {len(external_data)} 个演示用户")
 
 
+def _error(message: str) -> str:
+    """统一的失败返回格式"""
+    return json.dumps({"ok": False, "error": message}, ensure_ascii=False)
+
+
 @tool(
     description=(
-        "从外部系统获取指定用户在指定月份的使用记录。"
-        "返回 JSON 字符串；如果指定月份不存在，会返回最近可用月份，"
-        "并通过 used_latest_available 字段明确标记。"
+        "获取当前登录用户在指定月份的扫地机器人使用记录，用于生成个人使用报告。"
+        "用户身份由系统自动识别，无需也不能传入用户ID。"
+        "返回 JSON：ok 为 false 时 error 说明原因；"
+        "如果指定月份没有记录，会返回最近可用月份，并用 used_latest_available 字段标记。"
     )
 )
-def fetch_external_data(user_id: str, month: str) -> str:
-    generate_external_data()
+def fetch_usage_report(
+    # 与报告 Agent 的 context_schema 保持一致。
+    # 告诉类型与序列化系统：context 是包含 user_id 的上下文字典。
+    # runtime 仍由框架注入，不会暴露成模型可填写的工具参数。
+    runtime: ToolRuntime[
+        AgentContext
+    ],  # 由框架注入，不会出现在工具 Schema 里，模型看不到
+    month: Annotated[
+        str | None,
+        Field(
+            description="报告月份，格式 YYYY-MM；用户没指定月份时不传，默认当前月份",
+            pattern=r"^\d{4}-\d{2}$",  # 匹配 YYYY-MM 格式
+        ),
+    ] = None,
+) -> str:
+    """获取当前登录用户在指定月份的扫地机器人使用记录"""
+    context = runtime.context or {}
+    # 用户ID只从服务端注入的 context 取，模型无法指定别人的ID
+    user_id = context.get("user_id")
+    if not user_id:
+        return _error("当前未选择用户，无法查询使用记录")
+
+    # 标记报告场景：dynamic_prompt 中间件在下一次调用模型时切换为报告提示词
+    context["report"] = True
+
+    try:
+        generate_external_data()
+    except Exception as e:
+        logger.error(f"[fetch_usage_report]读取使用记录失败: {e}")
+        return _error("使用记录系统暂时不可用")
 
     user_records = external_data.get(user_id)
     if not user_records:
-        logger.warning(f"[fetch_external_data]未找到用户 {user_id} 的使用记录")
-        return ""
+        logger.warning(f"[fetch_usage_report]未找到用户 {user_id} 的使用记录")
+        return _error("没有找到当前用户的使用记录")
 
-    requested_month = month.strip()[:7]
+    requested_month = month or datetime.now().strftime("%Y-%m")
 
     if requested_month in user_records:
         data_month = requested_month
@@ -192,11 +227,12 @@ def fetch_external_data(user_id: str, month: str) -> str:
         data_month = max(user_records)
         used_latest_available = True
         logger.warning(
-            f"[fetch_external_data]用户 {user_id} 没有 {requested_month} 的记录，"
+            f"[fetch_usage_report]用户 {user_id} 没有 {requested_month} 的记录，"
             f"回退到最近可用月份 {data_month}"
         )
 
     payload = {
+        "ok": True,
         "requested_month": requested_month,
         "data_month": data_month,
         "used_latest_available": used_latest_available,
@@ -204,11 +240,3 @@ def fetch_external_data(user_id: str, month: str) -> str:
     }
 
     return json.dumps(payload, ensure_ascii=False) # 转换为 JSON 字符串，确保中文字符正常显示
-
-
-@tool(description="无入参，无返回值，调用后触发中间件自动为报告生成的场景动态注入上下文信息，为后续提示词切换提供上下文信息")
-def fill_context_for_report():
-    return "fill_context_for_report已调用"
-
-if __name__ == '__main__':
-    print(fetch_external_data("1001", "2026-06-01"))

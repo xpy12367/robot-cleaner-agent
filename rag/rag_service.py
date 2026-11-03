@@ -5,9 +5,12 @@
 from langchain_core.output_parsers import StrOutputParser
 from model.factory import chat_model
 from rag.vector_store import VectorStoreService
+from rag.query_rewriter import get_rewriter
 from utils.prompt_loader import load_rag_prompts
+from utils.config_handler import rag_config
 from langchain_core.prompts import PromptTemplate
 from langchain_core.documents import Document
+from utils.logger_handler import logger
 
 
 def print_prompt(prompt):
@@ -28,12 +31,21 @@ class RagSummarizeService:
             )
 
         self.retriever = self.vector_store.get_hybrid_retriever()  # 获取混合检索器
+
+        # 查询改写器（可选）
+        enable_rewrite = rag_config.get("enable_query_rewrite", False)
+        self.rewriter = get_rewriter(enabled=enable_rewrite)
+
         self.prompt_text = load_rag_prompts()  # 加载提示词
         self.prompt_template = PromptTemplate.from_template(
             self.prompt_text
         )  # from_template(): 从模板中创建提示词
         self.model = chat_model  # 获取模型
         self.chain = self._init_chain()  # 初始化链式调用
+
+        logger.info(
+            f"[RagSummarizeService] 已初始化 | 查询改写: {enable_rewrite}"
+        )
 
     def _init_chain(self):
         """
@@ -48,9 +60,14 @@ class RagSummarizeService:
         :param query: 用户问题
         :return: 参考资料列表
         """
-        return self.retriever.invoke(
-            query
-        )  # invoke() 接收字符串，不能包列表，否则embedding会把input多套一层导致400
+        # 如果启用查询改写，使用多查询融合检索
+        if self.rewriter:
+            queries = self.rewriter.rewrite(query)
+            logger.debug(f"[RagSummarizeService] 查询改写: 1 → {len(queries)}个")
+            return self.retriever.invoke_multi(queries)
+        else:
+            # 未启用改写，使用单查询检索
+            return self.retriever.invoke(query)
 
     def Rag_summarize(self, query: str) -> str:
         """

@@ -30,12 +30,12 @@ class SynonymExpander:
         初始化同义词扩展器
 
         Args:
-            synonym_file: 同义词文件路径，默认为 data/synonyms.txt
+            synonym_file: 同义词文件路径，默认为 config/synonyms.txt
         """
         if synonym_file is None:
-            # 默认路径：项目根目录/data/synonyms.txt
+            # 默认路径：项目根目录/config/synonyms.txt
             project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            synonym_file = os.path.join(project_root, "data", "synonyms.txt")
+            synonym_file = os.path.join(project_root, "config", "synonyms.txt")
 
         self.synonym_file = synonym_file
         # 同义词映射：{词: [该词所在的所有同义词组]}
@@ -52,7 +52,7 @@ class SynonymExpander:
 
         try:
             with open(self.synonym_file, "r", encoding="utf-8") as f:
-                for line_num, line in enumerate(f, 1):
+                for line_num, line in enumerate(f, 1):  # 从1开始编号
                     line = line.strip()
 
                     # 跳过空行和注释
@@ -71,14 +71,16 @@ class SynonymExpander:
                     # 每个词都映射到整个同义词组
                     for word in synonyms:
                         if word not in self.synonym_map:
-                            self.synonym_map[word] = synonyms
+                            self.synonym_map[word] = synonyms  # 每个词 → 整组
                         else:
                             # 合并：如果一个词出现在多个同义词组，取并集
-                            existing = set(self.synonym_map[word])
-                            existing.update(synonyms)
+                            existing = set(
+                                self.synonym_map[word]  # set(): 转换为集合，去重
+                            )  # ② 以前见过：取出旧组
+                            existing.update(synonyms)  #    和新组合并（取并集）
                             merged = list(existing)
                             for w in merged:
-                                self.synonym_map[w] = merged
+                                self.synonym_map[w] = merged  # ③ 把并集写回组内每一个词
 
             logger.info(
                 f"[SynonymExpander] 已加载 {len(self.synonym_map)} 个词的同义词映射"

@@ -129,7 +129,7 @@ class TestMonitorEnhanced(unittest.TestCase):
         mock_handler = MagicMock(return_value="success_result")
 
         # 执行监控中间件
-        result = monitor_tool_enhanced(mock_request, mock_handler)
+        result = monitor_tool_enhanced.wrap_tool_call(mock_request, mock_handler)
 
         # 验证结果
         self.assertEqual(result, "success_result")
@@ -164,7 +164,7 @@ class TestMonitorEnhanced(unittest.TestCase):
         mock_handler = MagicMock(side_effect=handler_with_first_failure)
 
         # 执行
-        result = monitor_tool_enhanced(mock_request, mock_handler)
+        result = monitor_tool_enhanced.wrap_tool_call(mock_request, mock_handler)
 
         # 验证重试了一次
         self.assertEqual(mock_handler.call_count, 2)
@@ -188,7 +188,7 @@ class TestMonitorEnhanced(unittest.TestCase):
 
         # 应该直接抛出异常，不重试
         with self.assertRaises(ValueError):
-            monitor_tool_enhanced(mock_request, mock_handler)
+            monitor_tool_enhanced.wrap_tool_call(mock_request, mock_handler)
 
         # 只调用了一次
         self.assertEqual(mock_handler.call_count, 1)
@@ -213,28 +213,39 @@ class TestMonitorEnhanced(unittest.TestCase):
 
         # 应该在达到max_retries后抛出异常
         with self.assertRaises(ConnectionError):
-            monitor_tool_enhanced(mock_request, mock_handler)
+            monitor_tool_enhanced.wrap_tool_call(mock_request, mock_handler)
 
         # 调用了 max_retries + 1 次（初始1次 + 重试2次）
         self.assertEqual(mock_handler.call_count, MonitorConfig.max_retries + 1)
 
-    @patch('agent.tools.monitor_enhanced.logger')
-    def test_report_context_switch(self, mock_logger):
-        """测试报告生成上下文切换"""
+    @patch("agent.tools.monitor_enhanced.logger")
+    def test_monitor_preserves_context(self, mock_logger):
+        """监控中间件应调用处理器，不自行修改业务上下文。"""
+
         mock_request = MagicMock()
         mock_request.tool_call = {
-            'name': 'fill_context_for_report',
-            'args': {}
+            "name": "fetch_usage_report",
+            "args": {},
         }
-        mock_request.runtime.context = {}
+        mock_request.runtime.context = {"user_id": "1001"}
 
-        mock_handler = MagicMock(return_value="report_mode_activated")
+        # 模拟工具处理器，只返回结果，不修改上下文。
+        mock_handler = MagicMock(return_value="report_result")
 
-        # 执行
-        monitor_tool_enhanced(mock_request, mock_handler)
+        result = monitor_tool_enhanced.wrap_tool_call(
+            mock_request,
+            mock_handler,
+        )
 
-        # 验证context被设置
-        self.assertTrue(mock_request.runtime.context.get("report"))
+        self.assertEqual(result, "report_result")
+        mock_handler.assert_called_once_with(mock_request)
+
+        # 报告标记属于实际报告工具的职责，
+        # 监控层不应仅凭工具名称改变上下文。
+        self.assertEqual(
+            mock_request.runtime.context,
+            {"user_id": "1001"},
+        )
 
 
 class TestMonitoringReport(unittest.TestCase):

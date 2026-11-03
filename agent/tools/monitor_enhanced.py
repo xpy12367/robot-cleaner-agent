@@ -194,11 +194,6 @@ def monitor_tool_enhanced(
                 trace_id=trace_id
             )
 
-            # 特殊逻辑：报告生成上下文切换
-            if tool_name == "fill_context_for_report":
-                request.runtime.context["report"] = True
-                logger.debug(f"[{trace_id}] 已切换到报告生成模式")
-
             return result
 
         except Exception as e:

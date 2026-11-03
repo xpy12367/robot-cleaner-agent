@@ -6,7 +6,8 @@
 
 页面功能:
     1. 聊天式交互:点击推荐问题或手动输入提问,客服回答以打字机效果流式输出
-    2. 只展示最终回答:自动过滤模型的思考过程与工具中间输出(见 react_agent.execute_chat_stream)
+    2. 只展示汇总节点的最终回答，过滤内部 Agent 和工具文本
+       （见 agent/multi_agent.py 的 execute_chat_stream）
     3. 侧边栏:模型连接配置 / 快捷提问 / 清空对话 / 系统信息
 """
 import os
@@ -60,19 +61,19 @@ def load_agent_config() -> dict:
         return yaml.safe_load(f)
 
 
-@st.cache_resource(show_spinner="正在初始化智能客服并检查知识库…")
+@st.cache_resource(show_spinner="正在初始化多 Agent 客服…")
 def get_agent():
-    """
-    懒加载并缓存智能体实例:第一次提问时才导入后端模块并完成初始化
+    """首次使用时创建多 Agent 服务，并缓存复用。
 
-    Agent 本身不保存会话状态,所有会话共用一个实例;
-    会话记忆按 session_id 隔离,调用时通过 get_session_id() 传入
+    执行图可以共享，每次请求单独构造任务状态。
+    聊天历史由 MemoryManager 按 session_id 区分。
     """
-    from agent.react_agent import ReactAgent
+    # 延迟导入，让页面先完成渲染，再加载后端模块。
+    from agent.multi_agent import MultiAgent
 
-    return ReactAgent(
+    return MultiAgent(
         enable_memory=True,  # 启用会话记忆
-        max_history_turns=5   # 保留最近5轮对话
+        max_history_turns=5,  # 保留最近5轮对话
     )
 
 
@@ -81,6 +82,23 @@ def get_session_id() -> str:
     if "agent_session_id" not in st.session_state:
         st.session_state["agent_session_id"] = uuid.uuid4().hex
     return st.session_state["agent_session_id"]
+
+
+@st.cache_data(show_spinner=False)
+def get_demo_user_ids() -> list[str]:
+    """读取演示用户的 ID 列表，用于侧边栏选择；不导入 agent_tools 以免触发 RAG 初始化"""
+    import csv as _csv
+    records_path = os.path.join(PROJECT_ROOT, "data", "external", "records.csv")
+    try:
+        with open(records_path, "r", encoding="utf-8-sig", newline="") as f:
+            return [row["用户ID"] for row in _csv.DictReader(f) if row.get("用户ID")]
+    except Exception:
+        return []
+
+
+def get_demo_user_id() -> str | None:
+    """当前选中的演示用户 ID"""
+    return st.session_state.get("demo_user_id")
 
 
 @st.cache_data(ttl="10m", max_entries=1)
@@ -190,7 +208,7 @@ def handle_prompt(question: str) -> None:
         try:
             # 模型思考与工具调用阶段可能持续数秒,先用等待提示占位
             with st.spinner("正在思考,检索知识库 / 调用工具…"):
-                stream = get_agent().execute_chat_stream(question, session_id=get_session_id())
+                stream = get_agent().execute_chat_stream(question, session_id=get_session_id(), user_id=get_demo_user_id())
                 # 阻塞至第一个文本 token,即思考阶段结束(后续交给 write_stream 流式渲染)
                 first_chunk = next(stream, None)
             st.session_state["agent_ready"] = True
@@ -257,7 +275,7 @@ st.html(
     <div class="agent-hero">
         <div class="agent-logo">🤖</div>
         <h1>扫地机器人智能客服</h1>
-        <p>ReAct 智能体 · 知识库检索 · 天气适配 · 使用报告生成</p>
+        <p>多 Agent 协作 · 知识库检索 · 天气适配 · 使用报告生成</p>
     </div>
     """
 )
@@ -273,6 +291,21 @@ with st.sidebar:
         st.caption("首次提问时会检查知识库；首次构建可能需要数分钟")
 
     st.markdown("---")
+    # —— 演示用户 ——
+    demo_users = get_demo_user_ids()
+    if demo_users:
+        st.markdown("### 演示用户")
+        st.caption("选择当前会话使用的用户ID，用于报告等个性化功能")
+        # key 让 Streamlit 在重跑时记住选中项；默认选第一个演示用户
+        chosen = st.selectbox(
+            "用户ID",
+            demo_users + ["（未登录）"],
+            key="demo_user_select",
+            label_visibility="collapsed",
+        )
+        st.session_state["demo_user_id"] = None if chosen == "（未登录）" else chosen
+
+        st.markdown("---")
 
     # —— 模型连接配置 ——
     key_source = get_setting_source(

@@ -203,3 +203,83 @@ class HybridRetriever:
         else:
             # 如果未启用重排，直接返回融合结果的top-k
             return fusion_candidates[:self.k]
+
+    def invoke_multi(self, queries: list[str]) -> list[Document]:
+        """
+        执行多查询融合检索
+
+        对多个查询分别执行混合检索，然后对所有结果再次融合排序。
+
+        Args:
+            queries: 查询列表（通常来自查询改写）
+
+        Returns:
+            融合后的top-k文档列表
+
+        流程：
+        1. 对每个查询执行混合检索
+        2. 收集所有候选文档
+        3. 按出现频次和平均排名融合
+        4. 使用交叉编码器重排（以第一个查询为基准）
+        """
+        if not queries:
+            return []
+
+        # 单查询降级为普通invoke
+        if len(queries) == 1:
+            return self.invoke(queries[0])
+
+        # 第1步：对每个查询执行混合检索，收集候选文档
+        all_candidates: dict[str, list[int]] = defaultdict(list)  # {doc_key: [rank1, rank2, ...]}
+        documents_by_key: dict[str, Document] = {}
+
+        for query in queries:
+            # 调用invoke获取该查询的top-k结果
+            query_results = self.invoke(query)
+
+            # 记录每个文档的排名（1-based）
+            for rank, doc in enumerate(query_results, start=1):
+                # key: 文档唯一标识
+                key = document_key(doc)
+                documents_by_key[key] = doc
+                all_candidates[key].append(rank)
+
+        # 第2步：按出现频次和平均排名融合排序
+        # 计算每个文档的融合分数：出现次数 × 平均倒数排名
+        fusion_scores: dict[str, float] = {}
+        for key, ranks in all_candidates.items():
+            # 出现频次
+            frequency = len(ranks)
+            # 平均倒数排名（RRF风格）
+            avg_reciprocal_rank = sum(1.0 / (self.rrf_k + r) for r in ranks) / len(ranks)
+            # 融合分数
+            fusion_scores[key] = frequency * avg_reciprocal_rank
+
+        # 按融合分数排序
+        ranked_keys = sorted(
+            fusion_scores,
+            key=lambda k: fusion_scores[k],
+            reverse=True,
+        )  # ranked_keys: 按融合分数排序的文档key列表
+
+        # 取top-reranker_top_k作为候选
+        fusion_candidates = [
+            documents_by_key[key] for key in ranked_keys[:self.reranker_top_k]
+        ]
+
+        # 第3步：交叉编码器重排（以第一个查询为基准）
+        if self.reranker and fusion_candidates:
+            reranked_docs, scores = self.reranker.rerank(
+                queries[0],  # 使用原始查询作为重排基准
+                fusion_candidates,
+                top_k=self.k
+            )
+
+            logger.debug(
+                f"[多查询融合] 完成: {len(queries)}个查询 → {len(fusion_candidates)}候选 → {len(reranked_docs)}结果"
+            )
+
+            return reranked_docs
+        else:
+            # 如果未启用重排，直接返回融合结果的top-k
+            return fusion_candidates[:self.k]
